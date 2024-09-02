@@ -1,0 +1,6 @@
+audit:
+  branches:
+    main: 
+      discovery:
+        search:
+          - OpenAPI_Spec/*.json

@@ -14,7 +14,7 @@ variables:
   registryConnection: '42css-connection'
   platformUrl: 'https://demolabs.42crunch.cloud'
   azureResourceGroup: Demos
-  namespace: apis
+  namespace: axl
   API_UUID: 8b6c7fe2-2151-45ee-a448-0b5e9c505f76
   SCAN_API_UUID: e773f4f8-6282-491b-9b7a-227ce15a91b4
   targetDirectory: configs
@@ -52,7 +52,7 @@ steps:
 - script: python -m pip install requests --upgrade pip
   displayName: 'Install tools'
 
-- task: APIContractSecurityAudit@3
+- task: APIContractSecurityAudit@4
   displayName: Auditing OAS Files
   inputs:
     apiToken: '$(42C_API_TOKEN)'
@@ -61,80 +61,16 @@ steps:
     logLevel: DEBUG
     defaultCollectionName: 'Discovered APIs'
 
-- task: 42CrunchConformanceService@1
-  displayName: Launching Conformance Scan V1
-  inputs:
-    job_name: '$(Build.BuildId)-v1'
-    platform_hostname: 'demolabs.42crunch.cloud'
-    scan_manager_url: 'https://photo-demo.westeurope.cloudapp.azure.com/scand'
-    scan_image: '42crunch/scand-agent:v1.22.6'
-    api_id: '$(API_UUID)'
-    job_expiration_time: 3600
-  env:
-    SCAN_TOKEN: $(PIXI_SCAN_TOKEN)    
-
-# Upload Scan V2 Configuration
-# Upon execution, a variable called scanv2_token is populated by the script (available for the time of the task)
-- task: PythonScript@0
-  name: setscanconfig
-  displayName: Update Scan V2 Configuration
-  inputs:
-    scriptSource: 'filePath' # Options: filePath, inline
-    scriptPath: $(Build.Repository.LocalPath)/scripts/update-config.py
-    #script: # Required when scriptSource == inline
-    arguments: $(42C_API_TOKEN) $(API_UUID) -n $(config_name) -f $(Build.Repository.LocalPath)/scan-configuration/scanconf_basicsetup.json -p $(platformUrl)   
-
 # - task: 42CrunchConformanceService@1
-#   displayName: Launching Conformance Scan V2
+#   displayName: Launching Conformance Scan V1
 #   inputs:
-#     job_name: '$(Build.BuildId)-v2'
+#     job_name: '$(Build.BuildId)-v1'
 #     platform_hostname: 'demolabs.42crunch.cloud'
 #     scan_manager_url: 'https://photo-demo.westeurope.cloudapp.azure.com/scand'
-#     scan_image: '42crunch/scand-agent:v2.0.0-rc05'
+#     scan_image: '42crunch/scand-agent:v1.22.6'
 #     api_id: '$(API_UUID)'
-#     job_expiration_time: 3600 
-#     env_data: "SCAN42C_host=https://photo-demo.westeurope.cloudapp.azure.com/version1/api;SCAN42C_user=$(PIXI_user);SCAN42C_pass=$(PIXI_pass)"
+#     job_expiration_time: 3600
 #   env:
-#     SCAN_TOKEN: $(setscanconfig.SCANV2_TOKEN)
+#     SCAN_TOKEN: $(PIXI_SCAN_TOKEN)    
 
-- task: 42CrunchSecurityAsCode@1
-  displayName: Inject Protection Policies  
-  inputs:
-    api_id: '$(API_UUID)'
-    platform_url: '$(platformUrl)'
-    sec_headers: true
-    global_rate_limiting: true
-  env:
-    API_KEY: $(42C_API_TOKEN)
 
-- task: 42CrunchUpdateProtectionService@1
-  displayName: Updating Pixi Deployment
-  inputs:
-    api_id: $(API_UUID)
-    platform_url: '$(platformUrl)'
-  env:
-    API_KEY: $(42C_API_TOKEN)
-
-- task: HelmDeploy@0
-  displayName: "Deploy Firewall prerequisites"
-  inputs:
-    connectionType: 'Kubernetes Service Connection'
-    kubernetesServiceConnection: '$(kubernetesConnection)'
-    namespace: '$(namespace)'
-    command: 'upgrade'
-    chartType: 'FilePath'
-    chartPath: './42c-firewall'
-    releaseName: '$(FW_RELEASE_NAME)'
-    overrideValues: 'apifirewall.protection_token=$(PROTECTION_TOKEN)'
-    
-- task: HelmDeploy@0
-  displayName: "Inject Firewall into API Deployment"
-  inputs:
-    connectionType: 'Kubernetes Service Connection'
-    kubernetesServiceConnection:  '$(kubernetesConnection)'
-    namespace: '$(namespace)'
-    command: 'upgrade'
-    chartType: 'FilePath'
-    chartPath: './42c-pixiapi'
-    releaseName: '$(PIXI_RELEASE_NAME)'
-    overrideValues: 'pixiapp.inject_firewall=true,pixiapp.pod_listen_port=8080'

@@ -1,0 +1,207 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  kubernetesConnection: 'platform-demos-apis-hesh'
+  platformUrl: 'https://platform.42crunch.com'
+  azureResourceGroup: Demos
+  namespace: hesh
+  # API_UUID: 9273b0fc-ab90-4325-9fcb-a6f504e07840
+
+  config_name: azureDevOps
+  #Testing only!
+  # PIXI_user: "scanuser@test.com"
+  # PIXI_pass: "hellopixi"
+  PIXI_host: "https://photo-demo.westeurope.cloudapp.azure.com/hesh/api"
+
+  #protectionsConnection: 'ProtectionsRepoConnection'
+
+# resources:
+#  repositories:
+#    - repository: protections
+#      type: github
+#      endpoint: $(protectionsConnection)
+#      name: 42c-presales/policies
+  
+steps:
+# - checkout: self
+# - checkout: protections
+- task: NodeTool@0
+  displayName: Use Node 12 or higher
+  inputs:
+    versionSpec: '=12.0.0'
+
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.10' 
+    addToPath: true 
+    #architecture: 'x64' # Options: x86, x64 (this argument applies only on Windows agents)
+
+- script: python -m pip install requests --upgrade pip
+  displayName: 'Install tools'
+
+# 42Crunch API Security Audit
+- task: APIContractSecurityAudit@3
+  displayName: Auditing OAS Files
+  inputs:
+    apiToken: '$(42C_API_TOKEN)'
+    minScore: '75'
+    platformUrl: '$(platformUrl)'
+    logLevel: DEBUG
+    defaultCollectionName: 'AzureDevOps Github Pixi main'
+    ignoreFailures: 'false'
+    jsonReport: 'audit-action-report-$(Build.BuildId).json'
+    sarifReport: 'audit-report-$(Build.BuildId).sarif'
+
+# Optional: Use the following script to check the audit SARIF report
+- task: CmdLine@2
+  displayName: 'Check Audit SARIF Report'
+  inputs:
+    script: |
+      echo "Audit Sarif Report:"
+      cat $(Build.Repository.LocalPath)/audit-report-$(Build.BuildId).sarif | jq . | head -n 50
+
+# Optional: fetch an access token from the Pixi API
+- task: CmdLine@2
+  displayName: 'Fetch Pixi API Token'
+  inputs:
+    script: |
+      PIXI_token=$(curl -sv -X POST -d '{"user": "$(PIXI_user)","pass": "$(PIXI_pass)"}' -H 'Content-Type: application/json' $(PIXI_host)/user/login | jq -r '.token')
+
+      echo "Pixi API Token: $PIXI_token"
+      echo "##vso[task.setvariable variable=PIXI_token]$PIXI_token"
+
+# Required: Fetch Pixi API UUID from the Audit summary report
+- task: CmdLine@2
+  displayName: 'Check Audit Summary Report'
+  inputs:
+    script: |
+      echo "Audit JSON Report:"
+      cat $(Build.Repository.LocalPath)/audit-action-report-$(Build.BuildId).json
+
+      apiId=$(cat $(Build.Repository.LocalPath)/audit-action-report-$(Build.BuildId).json | jq -r '.audit.report."OASFiles/pixi.json".apiId')
+      
+      printf "\n"
+      echo "Pixi API UUID: $apiId"
+      echo "##vso[task.setvariable variable=API_UUID]$apiId"
+
+# Required: Fetch Pixi API AliasId from the .42c/conf.yaml
+- task: CmdLine@2
+  displayName: 'Fetch API AliasId'
+  inputs:
+    script: |
+      echo "Audit JSON Report:"
+      cat $(Build.Repository.LocalPath)/.42c/conf.yaml
+
+      aliasId=$(cat $(Build.Repository.LocalPath)/.42c/conf.yaml | yq '.apis."OASFiles/pixi.json".alias')
+
+      printf "\n"
+      echo "Pixi API AliasId: $aliasId"
+      echo "##vso[task.setvariable variable=API_ALIAS_ID]$aliasId"
+
+# Upload Scan V2 Configuration
+# Upon execution, a variable called scanv2_token is populated by the script (available for the time of the task)
+- task: PythonScript@0
+  name: setscanconfig
+  displayName: Update Scan V2 Configuration
+  inputs:
+    scriptSource: 'filePath' # Options: filePath, inline
+    scriptPath: $(Build.Repository.LocalPath)/scripts/update-config.py
+    #script: # Required when scriptSource == inline
+    arguments: $(42C_API_TOKEN) $(API_UUID) -n $(config_name) -f $(Build.Repository.LocalPath)/.42c/scan/$(API_ALIAS_ID)/scanconf.json -p $(platformUrl) -d
+
+# Update the firewall protection with the latest API definition
+- task: 42CrunchUpdateProtectionService@1
+  displayName: Updating Pixi Deployment
+  inputs:
+    api_id: $(API_UUID)
+    platform_url: '$(platformUrl)'
+  env:
+    API_KEY: $(42C_API_TOKEN)
+
+# Run Conformance Scan on Pixi API Using the 42Crunch Conformance Service (internal)
+# - task: 42CrunchConformanceService@1
+#   displayName: Launching Conformance Scan V2
+#   inputs:
+#     job_name: '$(Build.BuildId)-v2'
+#     platform_hostname: 'demolabs.42crunch.cloud'
+#     scan_manager_url: 'https://photo-demo.westeurope.cloudapp.azure.com/scand'
+#     scan_image: '42crunch/scand-agent:v2'
+#     api_id: '$(API_UUID)'
+#     job_expiration_time: 3600 
+#     env_data: 'SCAN42C_HOST=$(PIXI_HOST)'
+#   env:
+#     SCAN_TOKEN: $(setscanconfig.SCANV2_TOKEN)
+
+# Run Conformance Scan by calling Scan Jobs Manager
+- task: PythonScript@0
+  name: scanjobsmanager
+  displayName: Run API Conformance Scan using Scan Jobs Manager Script (ScanD-Manager)
+  inputs:
+    scriptSource: 'filePath' # Options: filePath, inline
+    scriptPath: $(Build.Repository.LocalPath)/scripts/scand-manager.py
+    #script: # Required when scriptSource == inline
+    arguments: -s $(setscanconfig.SCANV2_TOKEN) -t $(PIXI_HOST) -j $(Build.BuildId)
+
+# Scan report link
+- task: CmdLine@2
+  displayName: 'Scan Report link & ScanD-Manager status'
+  inputs:
+    script: |
+      echo "Scan report: $(platformUrl)/apis/$(API_UUID)/scan"
+      echo "ScanD-Manager status: https://photo-demo.westeurope.cloudapp.azure.com/scand/api/job/scand-$(Build.BuildId)-v2"
+      $(Build.Repository.LocalPath)/scripts/check-scand-manager.sh scand-$(Build.BuildId)-v2
+
+# Inject Protection Policies into the API definition for security headers and global rate limiting
+- task: 42CrunchSecurityAsCode@1
+  displayName: Inject Protection Policies  
+  inputs:
+    api_id: '$(API_UUID)'
+    platform_url: '$(platformUrl)'
+    sec_headers: true
+    global_rate_limiting: true
+  env:
+    API_KEY: $(42C_API_TOKEN)
+
+# Update the firewall protection with the latest API definition
+- task: 42CrunchUpdateProtectionService@1
+  displayName: Updating Pixi Deployment
+  inputs:
+    api_id: $(API_UUID)
+    platform_url: '$(platformUrl)'
+  env:
+    API_KEY: $(42C_API_TOKEN)
+
+# Deploy firewall prerequisites
+- task: HelmDeploy@0
+  displayName: "Deploy Firewall prerequisites"
+  inputs:
+    connectionType: 'Kubernetes Service Connection'
+    kubernetesServiceConnection: '$(kubernetesConnection)'
+    namespace: '$(namespace)'
+    command: 'upgrade'
+    chartType: 'FilePath'
+    chartPath: './42c-firewall'
+    releaseName: '$(FW_RELEASE_NAME)'
+    overrideValues: 'apifirewall.protection_token=$(PROTECTION_TOKEN)'
+    
+# Inject 42Crunch firewall into the API deployment
+- task: HelmDeploy@0
+  displayName: "Inject Firewall into API Deployment"
+  inputs:
+    connectionType: 'Kubernetes Service Connection'
+    kubernetesServiceConnection:  '$(kubernetesConnection)'
+    namespace: '$(namespace)'
+    command: 'upgrade'
+    chartType: 'FilePath'
+    chartPath: './42c-pixiapi'
+    releaseName: '$(PIXI_RELEASE_NAME)'
+    overrideValues: 'pixiapp.inject_firewall=true,pixiapp.pod_listen_port=8080'
