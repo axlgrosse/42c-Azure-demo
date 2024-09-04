@@ -4,16 +4,16 @@
 # https://aka.ms/yaml
 
 trigger:
-  - main
+  - none
 
 pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  kubernetesConnection: 'platform-demos-apis-hesh'
-  platformUrl: 'https://platform.42crunch.com'
+  kubernetesConnection: 'platform-demos-apis-ns'
+  platformUrl: 'https://demolabs.42crunch.cloud'
   azureResourceGroup: Demos
-  namespace: hesh
+  namespace: axl
   # API_UUID: 9273b0fc-ab90-4325-9fcb-a6f504e07840
 
   config_name: azureDevOps

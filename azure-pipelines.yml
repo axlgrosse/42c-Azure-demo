@@ -3,8 +3,9 @@
 # Add steps that build, run tests, deploy, and more:
 # https://aka.ms/yaml
 
-trigger:
-  - main
+trigger: 
+- none
+#  - main
 
 pool:
   vmImage: 'ubuntu-latest'
@@ -52,7 +53,7 @@ steps:
 - script: python -m pip install requests --upgrade pip
   displayName: 'Install tools'
 
-- task: APIContractSecurityAudit@4
+- task: APIContractSecurityAudit@3
   displayName: Auditing OAS Files
   inputs:
     apiToken: '$(42C_API_TOKEN)'
